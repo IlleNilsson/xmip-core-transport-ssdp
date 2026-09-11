@@ -27,6 +27,7 @@
 //! used under test; a test binds `127.0.0.1:0` and sends from a second
 //! socket.
 
+pub mod loopback;
 pub mod message;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
@@ -48,6 +49,7 @@ pub struct Announcement {
     pub location: String,
 }
 
+#[derive(Clone)]
 pub struct SsdpTransport {
     bind: String,
     announcing: Option<Announcement>,
@@ -221,9 +223,56 @@ impl Transport for SsdpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transport::loopback::Loopback;
 
     fn node() -> SsdpTransport {
         SsdpTransport::new("127.0.0.1:0").timing_out_after(Duration::from_secs(2))
+    }
+
+    #[test]
+    fn a_stream_rounds_as_a_search_per_chunk() {
+        let loopback = SsdpTransport::loopback();
+        let opaque: &[u8] = b"\x00line\r\nbreak \xff";
+        let arrived = loopback.round(opaque).expect("opaque");
+        assert_eq!(arrived.bytes, opaque);
+        assert!(
+            arrived.origin_uri.starts_with("ssdp://127.0.0.1:"),
+            "{}",
+            arrived.origin_uri
+        );
+        assert!(
+            arrived.origin_uri.ends_with(
+                "?nt=urn:xmip:device:Probe:1\
+                     &usn=uuid:xmip-probe::urn:xmip:device:Probe:1&nts=ssdp:alive"
+            ),
+            "{}",
+            arrived.origin_uri
+        );
+        let long = vec![0x2a; 5000];
+        assert_eq!(loopback.round(&long).expect("long").bytes, long);
+        assert!(loopback.round(b"").expect("empty").bytes.is_empty());
+        assert!(loopback.ceiling().is_none());
+        assert!(loopback.refuses(opaque).is_none());
+    }
+
+    #[test]
+    fn the_loopback_returns_the_edges_whole() {
+        let loopback = SsdpTransport::loopback();
+        let edges: [(&str, Vec<u8>); 6] = [
+            ("empty", Vec::new()),
+            ("one byte", vec![0x2a]),
+            ("every byte", (0..=255).collect()),
+            ("nul run", vec![0; 512]),
+            ("high bytes", vec![0xff; 512]),
+            ("crlf storm", b"\r\n".repeat(400)),
+        ];
+        for (name, payload) in edges {
+            assert_eq!(
+                loopback.round(&payload).expect(name).bytes,
+                payload,
+                "{name}"
+            );
+        }
     }
 
     fn printer() -> SsdpTransport {
