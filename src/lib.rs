@@ -30,7 +30,7 @@
 pub mod loopback;
 pub mod message;
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
 pub use message::{ALIVE, ALL, BYEBYE, GROUP, Kind, Message};
@@ -97,14 +97,7 @@ impl SsdpTransport {
     /// Where the address is taken, malformed, or not permitted, or the
     /// group could not be joined.
     pub fn bind_udp(&self) -> Result<(UdpSocket, String)> {
-        let Some((group, port)) = multicast_group(&self.bind) else {
-            return socket::bind_udp(&self.bind, self.timeout);
-        };
-        let (socket, local) = socket::bind_udp(&port, self.timeout)?;
-        socket
-            .join_multicast_v4(&group, &Ipv4Addr::UNSPECIFIED)
-            .map_err(|e| classify("joining the group", &e))?;
-        Ok((socket, local))
+        socket::bind_multicast(&self.bind, self.timeout)
     }
 
     /// Take one notification or search response from an already-bound
@@ -165,17 +158,6 @@ impl SsdpTransport {
     }
 }
 
-/// The group and the `0.0.0.0:port` to bind for it, where `bind` is a
-/// multicast address.
-#[must_use]
-pub fn multicast_group(bind: &str) -> Option<(Ipv4Addr, String)> {
-    let address: SocketAddrV4 = bind.parse().ok()?;
-    address
-        .ip()
-        .is_multicast()
-        .then(|| (*address.ip(), format!("0.0.0.0:{}", address.port())))
-}
-
 fn arrived(peer: SocketAddr, message: &Message, raw: &[u8]) -> Arrived {
     Arrived::new(
         format!(
@@ -223,7 +205,9 @@ impl Transport for SsdpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
     use transport::loopback::Loopback;
+    use transport::payload::edge_payloads;
 
     fn node() -> SsdpTransport {
         SsdpTransport::new("127.0.0.1:0").timing_out_after(Duration::from_secs(2))
@@ -258,14 +242,7 @@ mod tests {
     #[test]
     fn the_loopback_returns_the_edges_whole() {
         let loopback = SsdpTransport::loopback();
-        let edges: [(&str, Vec<u8>); 6] = [
-            ("empty", Vec::new()),
-            ("one byte", vec![0x2a]),
-            ("every byte", (0..=255).collect()),
-            ("nul run", vec![0; 512]),
-            ("high bytes", vec![0xff; 512]),
-            ("crlf storm", b"\r\n".repeat(400)),
-        ];
+        let edges = edge_payloads();
         for (name, payload) in edges {
             assert_eq!(
                 loopback.round(&payload).expect(name).bytes,
@@ -386,11 +363,9 @@ mod tests {
         let refused = far_end.receive_datagram(&socket).expect_err("refused");
         assert!(!refused.retryable);
         assert!(!node().send("http://x", b"").expect_err("scheme").retryable);
-        let (group, port) = multicast_group(GROUP).expect("multicast");
+        let (group, port) = socket::multicast_group(GROUP).expect("multicast");
         assert_eq!(group, Ipv4Addr::new(239, 255, 255, 250));
         assert_eq!(port, "0.0.0.0:1900");
-        assert!(multicast_group("127.0.0.1:1900").is_none());
-        assert!(multicast_group("nonsense").is_none());
         assert!(node().claims().is_none());
         assert_eq!(node().name(), "ssdp");
         assert!(node().directions().receives());
