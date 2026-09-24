@@ -14,6 +14,7 @@ use std::net::UdpSocket;
 
 use codec::hex;
 use transport::Arrived;
+use transport::bound::{Bound, Reading};
 use transport::error::{Result, classify, protocol_error};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
@@ -42,30 +43,21 @@ impl SsdpTransport {
     }
 }
 
-/// A bound control point waiting for a device to announce itself.
-struct ControlPoint {
-    transport: SsdpTransport,
-    socket: UdpSocket,
-    address: String,
-}
-
-impl FarEnd for ControlPoint {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
+impl Reading for SsdpTransport {
+    /// A bound control point waiting for a device to announce itself.
+    ///
     /// Take the announcement, then search the device that made it for the
     /// Stream, a chunk per search.
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        let alive = self.transport.receive_datagram(&self.socket)?;
+    fn take_one(self, socket: &UdpSocket) -> Result<Arrived> {
+        let alive = self.receive_datagram(socket)?;
         let device = peer_of(&alive.origin_uri)?;
         let mut bytes = Vec::new();
         for n in 0..usize::MAX {
             let search = Message::search(&format!("{STREAM}{n}"), 1);
-            self.socket
+            socket
                 .send_to(&message::format(&search), &device)
                 .map_err(|e| classify("searching", &e))?;
-            let answer = self.transport.receive_datagram(&self.socket)?;
+            let answer = self.receive_datagram(socket)?;
             let response = message::parse(&answer.bytes)?;
             let Some(chunk) = response.header(HEADER) else {
                 return Ok(Arrived::new(alive.origin_uri, bytes));
@@ -78,12 +70,7 @@ impl FarEnd for ControlPoint {
 
 impl Loopback for SsdpTransport {
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let (socket, address) = self.bind_udp()?;
-        Ok(Box::new(ControlPoint {
-            transport: self.clone(),
-            socket,
-            address,
-        }))
+        Ok(Box::new(Bound::new(self.clone(), self.bind_udp()?)))
     }
 
     /// A device announces itself alive to the control point at `address`,
