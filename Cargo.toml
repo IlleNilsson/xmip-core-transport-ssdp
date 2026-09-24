@@ -18,6 +18,8 @@ path = "src/lib.rs"
 # (repository-model.md). Standard library otherwise: SSDP is an HTTP-shaped
 # text message in a datagram.
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+# The estate's encoding primitives: a header's bytes spelled in hex.
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test

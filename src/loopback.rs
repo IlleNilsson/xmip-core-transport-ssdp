@@ -12,9 +12,9 @@
 
 use std::net::UdpSocket;
 
+use codec::hex;
 use transport::Arrived;
 use transport::error::{Result, classify, protocol_error};
-use transport::hex::{hex, unhex};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
 
@@ -70,7 +70,7 @@ impl FarEnd for ControlPoint {
             let Some(chunk) = response.header(HEADER) else {
                 return Ok(Arrived::new(alive.origin_uri, bytes));
             };
-            bytes.extend(unhex(chunk)?);
+            bytes.extend(hex::decode(chunk)?);
         }
         Err(protocol_error("a Stream that never ends"))
     }
@@ -121,7 +121,7 @@ impl SsdpTransport {
     fn response(&self, payload: &[u8], n: usize) -> Vec<u8> {
         let response = Message::response(&format!("{STREAM}{n}"), USN, LOCATION, &self.server);
         let response = match payload.chunks(CHUNK).nth(n) {
-            Some(chunk) => response.with(HEADER, &hex(chunk)),
+            Some(chunk) => response.with(HEADER, &hex::encode(chunk)),
             None => response,
         };
         message::format(&response)
