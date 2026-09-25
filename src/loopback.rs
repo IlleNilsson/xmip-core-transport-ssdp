@@ -97,10 +97,6 @@ impl Loopback for SsdpTransport {
             }
         }
     }
-
-    fn unblock(&self, _address: &str) {
-        // The receive has its own timeout; there is no listener to poke.
-    }
 }
 
 impl SsdpTransport {
