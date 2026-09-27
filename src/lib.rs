@@ -20,7 +20,8 @@
 //! `ssdp://239.255.255.250:1900`. Bytes that already open with `NOTIFY`,
 //! `M-SEARCH` or `HTTP/` go as they are; any other bytes go as a `NOTIFY`
 //! `ssdp:alive` whose `LOCATION` they are, under the `NT` and `USN` the
-//! transport was built announcing.
+//! transport was built announcing. A location is header text: bytes that
+//! are not UTF-8 are refused, never read lossily.
 //!
 //! Multicast is joined when the bind address is in 224/4 — the socket
 //! binds the port on every interface and joins the group — and is never
@@ -36,7 +37,8 @@ use std::time::Duration;
 pub use message::{ALIVE, ALL, BYEBYE, GROUP, Kind, Message};
 use transport::error::{Result, classify, protocol_error};
 use transport::socket;
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Presence, Read, Setting, Settings};
 
 /// The largest datagram taken; an SSDP message is a few hundred bytes.
 pub const MAX_DATAGRAM: usize = 8192;
@@ -140,13 +142,20 @@ impl SsdpTransport {
     }
 
     /// `bytes` as a message: as they are when they already are one, else
-    /// an `ssdp:alive` at that location.
-    #[must_use]
-    pub fn compose(&self, bytes: &[u8]) -> Vec<u8> {
+    /// an `ssdp:alive` at that location. A location is the `LOCATION`
+    /// header's text, so those bytes are read as UTF-8 or refused.
+    ///
+    /// # Errors
+    /// Where the bytes are neither a message nor a UTF-8 location.
+    pub fn compose(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         if message::is_message(bytes) {
-            return bytes.to_vec();
+            return Ok(bytes.to_vec());
         }
-        let location = String::from_utf8_lossy(bytes);
+        let location = std::str::from_utf8(bytes).map_err(|refused| {
+            protocol_error(format!(
+                "neither an SSDP message nor a location in UTF-8 text: {refused}"
+            ))
+        })?;
         let (nt, usn) = self.announcing.as_ref().map_or(
             (
                 "upnp:rootdevice".to_string(),
@@ -154,7 +163,12 @@ impl SsdpTransport {
             ),
             |a| (a.st.clone(), a.usn.clone()),
         );
-        message::format(&Message::alive(&nt, &usn, location.trim(), &self.server))
+        Ok(message::format(&Message::alive(
+            &nt,
+            &usn,
+            location.trim(),
+            &self.server,
+        )))
     }
 }
 
@@ -192,7 +206,7 @@ impl Transport for SsdpTransport {
             }
             None => target,
         };
-        let datagram = self.compose(bytes);
+        let datagram = self.compose(bytes)?;
         let sender =
             UdpSocket::bind("0.0.0.0:0").map_err(|e| classify("binding the sending socket", &e))?;
         sender
@@ -202,12 +216,99 @@ impl Transport for SsdpTransport {
     }
 }
 
+impl Configured for SsdpTransport {
+    /// The address is where a Receive Location listens: the group
+    /// `239.255.255.250:1900`, or a unicast address for answers to its own
+    /// searches. A send's target is each send's own.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "st",
+                kind: xcore::settings::Kind::Text,
+                presence: Presence::Optional,
+                meaning: "The search target this node announces and answers searches for, given \
+                          with `usn` and `location`; nothing is announced when left out.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "usn",
+                kind: xcore::settings::Kind::Text,
+                presence: Presence::Optional,
+                meaning: "The unique service name this node announces, given with `st` and \
+                          `location`.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "location",
+                kind: xcore::settings::Kind::Text,
+                presence: Presence::Optional,
+                meaning: "The URL of the description this node announces, given with `st` and \
+                          `usn`.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "timeout",
+                kind: xcore::settings::Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long a receive waits for a message; unbounded when left out.",
+                applies: Applies::Receive,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        let mut transport = Self::new(address);
+        match (
+            settings.optional_text("st"),
+            settings.optional_text("usn"),
+            settings.optional_text("location"),
+        ) {
+            (Some(st), Some(usn), Some(location)) => {
+                transport = transport.announcing(st, usn, location);
+            }
+            (None, None, None) => {}
+            _ => {
+                return Err(protocol_error(
+                    "an announcement is st, usn and location together",
+                ));
+            }
+        }
+        if let Some(timeout) = settings.optional_duration("timeout") {
+            transport = transport.timing_out_after(timeout);
+        }
+        Ok(transport)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
     use transport::loopback::Loopback;
     use transport::payload::edge_payloads;
+
+    #[test]
+    fn ssdp_declares_its_settings_and_reads_through_them() {
+        use xcore::settings::Given;
+        assert_eq!(SsdpTransport::SETTINGS.problems(), Vec::<String>::new());
+        let text = |name: &str, value: &str| (name.to_string(), Given::Text(value.to_string()));
+        let given = [
+            text("st", "urn:xmip:device:node:1"),
+            text("usn", "uuid:n1::urn:xmip:device:node:1"),
+            text("location", "http://10.0.0.5/node.xml"),
+            text("timeout", "2s"),
+        ];
+        let built = SsdpTransport::open(GROUP, Applies::Receive, &given).expect("configured");
+        let announcing = built.announcing.as_ref().expect("announcing");
+        assert_eq!(announcing.location, "http://10.0.0.5/node.xml");
+        assert_eq!(built.timeout, Some(Duration::from_secs(2)));
+        let Err(refused) = SsdpTransport::open("host:1900", Applies::Send, &given) else {
+            panic!("a Send Location waits for nothing");
+        };
+        assert!(refused.message.contains("\"timeout\""), "{refused}");
+        assert!(SsdpTransport::open("h:1", Applies::Send, &given[..1]).is_err());
+    }
 
     fn node() -> SsdpTransport {
         SsdpTransport::new("127.0.0.1:0").timing_out_after(Duration::from_secs(2))
@@ -294,6 +395,11 @@ mod tests {
             gone.origin_uri
                 .ends_with("?nt=upnp:rootdevice&usn=uuid:9::upnp:rootdevice&nts=ssdp:byebye")
         );
+        let refused = node()
+            .send(&address, b"http://x/\xff")
+            .expect_err("not UTF-8");
+        assert!(refused.message.contains("UTF-8"), "{refused}");
+        assert!(!refused.retryable);
         node()
             .send(&address, b"http://x/")
             .expect("no announcement");
