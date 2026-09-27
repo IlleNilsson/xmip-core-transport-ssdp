@@ -36,6 +36,7 @@ use std::time::Duration;
 
 pub use message::{ALIVE, ALL, BYEBYE, GROUP, Kind, Message};
 use transport::error::{Result, classify, protocol_error};
+use transport::sender::Sender;
 use transport::socket;
 use transport::{Arrived, Configured, Directions, Transport};
 use xcore::settings::{Applies, Presence, Read, Setting, Settings};
@@ -57,6 +58,8 @@ pub struct SsdpTransport {
     announcing: Option<Announcement>,
     server: String,
     timeout: Option<Duration>,
+    /// The socket every send leaves from, bound once.
+    sender: Sender,
 }
 
 impl SsdpTransport {
@@ -69,6 +72,7 @@ impl SsdpTransport {
             announcing: None,
             server: "xmip/0.1 UPnP/1.1".to_string(),
             timeout: None,
+            sender: Sender::new(),
         }
     }
 
@@ -207,12 +211,7 @@ impl Transport for SsdpTransport {
             None => target,
         };
         let datagram = self.compose(bytes)?;
-        let sender =
-            UdpSocket::bind("0.0.0.0:0").map_err(|e| classify("binding the sending socket", &e))?;
-        sender
-            .send_to(&datagram, address)
-            .map_err(|e| classify("sending the datagram", &e))?;
-        Ok(())
+        self.sender.send_to(&datagram, address)
     }
 }
 
