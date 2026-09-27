@@ -36,6 +36,7 @@ use std::time::Duration;
 
 pub use message::{ALIVE, ALL, BYEBYE, GROUP, Kind, Message};
 use transport::error::{Result, classify, protocol_error};
+use transport::kept::Kept;
 use transport::sender::Sender;
 use transport::socket;
 use transport::{Arrived, Configured, Directions, Transport};
@@ -60,6 +61,9 @@ pub struct SsdpTransport {
     timeout: Option<Duration>,
     /// The socket every send leaves from, bound once.
     sender: Sender,
+    /// The socket the first receive binds and joins the group on, and every
+    /// receive reads.
+    receiving: Kept<UdpSocket>,
 }
 
 impl SsdpTransport {
@@ -73,6 +77,7 @@ impl SsdpTransport {
             server: "xmip/0.1 UPnP/1.1".to_string(),
             timeout: None,
             sender: Sender::new(),
+            receiving: Kept::new(),
         }
     }
 
@@ -197,9 +202,12 @@ impl Transport for SsdpTransport {
         Directions::BOTH
     }
 
+    /// One notification or search response, from the socket the first
+    /// receive bound and kept: what arrived between two receives waits in
+    /// its buffer.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        let (socket, _) = self.bind_udp()?;
-        Ok(vec![self.receive_datagram(&socket)?])
+        let socket = self.receiving.bound(|| self.bind_udp())?;
+        Ok(vec![self.receive_datagram(socket)?])
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -358,6 +366,30 @@ mod tests {
             "uuid:1234::urn:schemas-upnp-org:device:Printer:1",
             "http://10.0.0.5:8080/desc.xml",
         )
+    }
+
+    #[test]
+    fn every_receive_reads_the_socket_the_first_bound() {
+        // Every notification lands before any receive: in the kept socket's
+        // buffer, taken in order by receives that bind nothing.
+        let far_end = node();
+        far_end
+            .receiving
+            .bound(|| far_end.bind_udp())
+            .expect("bound");
+        let address = far_end.receiving.address().expect("address");
+        let notifications: Vec<Vec<u8>> = (0..5)
+            .map(|round| {
+                let usn = format!("uuid:{round}::upnp:rootdevice");
+                message::format(&Message::byebye("upnp:rootdevice", &usn))
+            })
+            .collect();
+        for notification in &notifications {
+            node().send(address, notification).expect("notified");
+        }
+        for notification in &notifications {
+            assert_eq!(&far_end.receive().expect("received")[0].bytes, notification);
+        }
     }
 
     #[test]
