@@ -35,6 +35,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
 pub use message::{ALIVE, ALL, BYEBYE, GROUP, Kind, Message};
+use net::Target;
 use transport::error::{Result, classify, protocol_error};
 use transport::kept::Kept;
 use transport::sender::Sender;
@@ -211,12 +212,10 @@ impl Transport for SsdpTransport {
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let address = match socket::target("ssdp", target) {
-            Some((address, _)) => address,
-            None if target.contains("://") => {
-                return Err(protocol_error(format!("not an ssdp target: {target}")));
-            }
-            None => target,
+        let address = match Target::parse(target) {
+            Ok(named) if named.is(&["ssdp"]) => named.authority(),
+            Ok(_) => return Err(protocol_error(format!("not an ssdp target: {target}"))),
+            Err(_) => target,
         };
         let datagram = self.compose(bytes)?;
         self.sender.send_to(&datagram, address)

@@ -3,7 +3,12 @@
 //! then headers to a blank line and nothing after it. Header names are
 //! matched without regard to case, as HTTP's are, because every `UPnP`
 //! stack capitalises them differently.
+//!
+//! The head is HTTP's, written and read by `net::head` as every other
+//! line-oriented head is; this file wrote and read its own until
+//! 2026-09-28.
 
+use net::head;
 use transport::error::{Result, protocol_error};
 
 /// The multicast group and port SSDP lives on.
@@ -26,7 +31,7 @@ pub enum Kind {
 impl Kind {
     /// The start line as written.
     #[must_use]
-    pub const fn start_line(self) -> &'static str {
+    const fn start_line(self) -> &'static str {
         match self {
             Self::Notify => "NOTIFY * HTTP/1.1",
             Self::Search => "M-SEARCH * HTTP/1.1",
@@ -128,14 +133,8 @@ impl Message {
 /// `message` as the datagram.
 #[must_use]
 pub fn format(message: &Message) -> Vec<u8> {
-    let mut out = String::from(message.kind.start_line());
-    out.push_str("\r\n");
-    for (name, value) in &message.headers {
-        out.push_str(name);
-        out.push_str(": ");
-        out.push_str(value);
-        out.push_str("\r\n");
-    }
+    let mut out = format!("{}\r\n", message.kind.start_line());
+    head::write_fields(&mut out, &message.headers);
     out.push_str("\r\n");
     out.into_bytes()
 }
@@ -149,29 +148,21 @@ pub fn is_message(bytes: &[u8]) -> bool {
 /// One datagram.
 ///
 /// # Errors
-/// Not text, not one of the three start lines, or a header line without
-/// a colon.
+/// Not text, or not one of the three start lines. A line without a colon
+/// is not a header and is passed over, as HTTP's reader passes it over.
 pub fn parse(bytes: &[u8]) -> Result<Message> {
-    let text = std::str::from_utf8(bytes).map_err(|_| protocol_error("a message not UTF-8"))?;
-    let mut lines = text.split('\n').map(|line| line.trim_end_matches('\r'));
-    let start = lines.next().unwrap_or("").trim();
+    let lines = head::read_head(&mut &bytes[..])?;
+    let start = lines.first().map_or("", |line| line.trim());
     let kind = match start.split_whitespace().collect::<Vec<_>>()[..] {
         ["NOTIFY", "*", "HTTP/1.1"] => Kind::Notify,
         ["M-SEARCH", "*", "HTTP/1.1"] => Kind::Search,
         ["HTTP/1.1", "200", ..] => Kind::Response,
         _ => return Err(protocol_error(format!("not an SSDP start line: {start:?}"))),
     };
-    let mut headers = Vec::new();
-    for line in lines {
-        if line.is_empty() {
-            break;
-        }
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| protocol_error(format!("a header without a colon: {line:?}")))?;
-        headers.push((name.trim().to_string(), value.trim().to_string()));
-    }
-    Ok(Message { kind, headers })
+    Ok(Message {
+        kind,
+        headers: head::fields(&lines[1..]),
+    })
 }
 
 #[cfg(test)]
@@ -218,7 +209,8 @@ mod tests {
         assert!(parse(b"GET / HTTP/1.1\r\n\r\n").is_err(), "a request");
         assert!(parse(b"NOTIFY / HTTP/1.1\r\n\r\n").is_err(), "not *");
         assert!(parse(b"HTTP/1.1 404 Not Found\r\n\r\n").is_err(), "not 200");
-        assert!(parse(b"NOTIFY * HTTP/1.1\r\nno colon\r\n\r\n").is_err());
+        let passed = parse(b"NOTIFY * HTTP/1.1\r\nno colon\r\nNT: a\r\n\r\n").expect("read");
+        assert_eq!(passed.headers, [("NT".to_string(), "a".to_string())]);
         assert!(parse(&[0xff]).is_err(), "not text");
         assert!(
             !is_message(b"http://10.0.0.5/d.xml"),
