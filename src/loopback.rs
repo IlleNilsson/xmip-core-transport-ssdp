@@ -13,6 +13,7 @@
 use std::net::UdpSocket;
 
 use codec::hex;
+use net::Target;
 use transport::Arrived;
 use transport::bound::{Bound, Reading};
 use transport::error::{Result, classify, protocol_error};
@@ -113,8 +114,8 @@ impl SsdpTransport {
 
 /// The peer an origin `ssdp://peer?…` names.
 fn peer_of(origin: &str) -> Result<String> {
-    socket::target("ssdp", origin)
-        .map(|(authority, _)| authority.split_once('?').map_or(authority, |(a, _)| a))
+    Target::under(&["ssdp"], origin)
+        .map(|named| named.authority())
         .filter(|peer| !peer.is_empty())
         .map(str::to_string)
         .ok_or_else(|| protocol_error(format!("an origin naming no peer: {origin}")))
