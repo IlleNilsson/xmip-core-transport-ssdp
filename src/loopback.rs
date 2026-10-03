@@ -14,7 +14,7 @@ use std::net::UdpSocket;
 
 use codec::hex;
 use net::Target;
-use transport::Arrived;
+use transport::Taken;
 use transport::bound::{Bound, Reading};
 use transport::error::{Result, classify, protocol_error};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
@@ -49,8 +49,8 @@ impl Reading for SsdpTransport {
     ///
     /// Take the announcement, then search the device that made it for the
     /// Stream, a chunk per search.
-    fn take_one(self, socket: &UdpSocket) -> Result<Arrived> {
-        let alive = self.receive_datagram(socket)?;
+    fn take_one(self, socket: &UdpSocket) -> Result<Taken> {
+        let alive = self.receive_datagram(socket)?.taken()?;
         let device = peer_of(&alive.origin_uri)?;
         let mut bytes = Vec::new();
         for n in 0..usize::MAX {
@@ -58,10 +58,10 @@ impl Reading for SsdpTransport {
             socket
                 .send_to(&message::format(&search), &device)
                 .map_err(|e| classify("searching", &e))?;
-            let answer = self.receive_datagram(socket)?;
+            let answer = self.receive_datagram(socket)?.taken()?;
             let response = message::parse(&answer.bytes)?;
             let Some(chunk) = response.header(HEADER) else {
-                return Ok(Arrived::new(alive.origin_uri, bytes));
+                return Ok(Taken::new(alive.origin_uri, bytes));
             };
             bytes.extend(hex::decode(chunk)?);
         }
