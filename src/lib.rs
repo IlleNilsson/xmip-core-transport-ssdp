@@ -23,6 +23,10 @@
 //! transport was built announcing. A location is header text: bytes that
 //! are not UTF-8 are refused, never read lossily.
 //!
+//! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): a notification
+//! or a search response is a datagram nobody answers, so its device is
+//! never told how the receive cycle ended. Each message arrives whole.
+//!
 //! Multicast is joined when the bind address is in 224/4 — the socket
 //! binds the port on every interface and joins the group — and is never
 //! used under test; a test binds `127.0.0.1:0` and sends from a second
@@ -40,8 +44,12 @@ use transport::error::{Result, classify, protocol_error};
 use transport::kept::Kept;
 use transport::sender::Sender;
 use transport::socket;
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
 use xcore::settings::{Applies, Presence, Read, Setting, Settings};
+
+/// Why an SSDP message cannot be acknowledged after the receive cycle.
+pub const AT_MOST_ONCE: &str = "an SSDP notification or search response is a datagram nobody \
+                                answers, so its device is never told how the receive cycle ended";
 
 /// The largest datagram taken; an SSDP message is a few hundred bytes.
 pub const MAX_DATAGRAM: usize = 8192;
@@ -182,8 +190,9 @@ impl SsdpTransport {
     }
 }
 
+/// One message, whole; acceptance is at-most-once ([`AT_MOST_ONCE`]).
 fn arrived(peer: SocketAddr, message: &Message, raw: &[u8]) -> Arrived {
-    Arrived::new(
+    Arrived::whole(
         format!(
             "ssdp://{peer}?nt={}&usn={}&nts={}",
             message.notification_type(),
@@ -191,6 +200,7 @@ fn arrived(peer: SocketAddr, message: &Message, raw: &[u8]) -> Arrived {
             message.header("NTS").unwrap_or("")
         ),
         raw,
+        Acknowledgement::at_most_once(AT_MOST_ONCE),
     )
 }
 
@@ -203,9 +213,14 @@ impl Transport for SsdpTransport {
         Directions::BOTH
     }
 
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Unordered("each datagram is its own")
+    }
+
     /// One notification or search response, from the socket the first
     /// receive bound and kept: what arrived between two receives waits in
-    /// its buffer.
+    /// its buffer. Acceptance is at-most-once here: nobody answers an SSDP
+    /// message ([`AT_MOST_ONCE`]).
     fn receive(&self) -> Result<Vec<Arrived>> {
         let socket = self.receiving.bound(|| self.bind_udp())?;
         Ok(vec![self.receive_datagram(socket)?])
@@ -387,7 +402,10 @@ mod tests {
             node().send(address, notification).expect("notified");
         }
         for notification in &notifications {
-            assert_eq!(&far_end.receive().expect("received")[0].bytes, notification);
+            let mut arrived = far_end.receive().expect("received");
+            let arrived = arrived.remove(0);
+            assert!(!arrived.defers(), "an SSDP message is at-most-once");
+            assert_eq!(&arrived.taken().expect("taken").bytes, notification);
         }
     }
 
@@ -402,6 +420,7 @@ mod tests {
             )
             .expect("announcing");
         let arrived = far_end.receive_datagram(&socket).expect("receiving");
+        let arrived = arrived.taken().expect("taken");
         assert!(
             arrived.origin_uri.ends_with(
                 "?nt=urn:schemas-upnp-org:device:Printer:1\
@@ -420,6 +439,7 @@ mod tests {
         ));
         node().send(&address, &byebye).expect("as it is");
         let gone = far_end.receive_datagram(&socket).expect("receiving");
+        let gone = gone.taken().expect("taken");
         assert_eq!(gone.bytes, byebye);
         assert!(
             gone.origin_uri

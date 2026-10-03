@@ -8,6 +8,13 @@ A Receive Location keeps its socket, bound on the first receive (`transport::kep
 
 A message's head is written and read by `net::head` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), as every line-oriented head is, and a target and an origin by `net::Target`. Until 2026-09-28 this technology wrote and read its own head and cut the query off an origin by hand.
 
+## Acknowledgement
+
+Acceptance is at-most-once here. A notification or a search response is a
+datagram nobody answers, so its device is never told how the receive cycle
+ended, and a crash before the Stream is durable loses it. Each message arrives
+whole.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
