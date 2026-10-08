@@ -14,6 +14,7 @@ use std::net::UdpSocket;
 
 use codec::hex;
 use net::Target;
+use transport::ArrivalIdentity;
 use transport::Taken;
 use transport::bound::{Bound, Reading};
 use transport::error::{Result, classify, protocol_error};
@@ -61,7 +62,9 @@ impl Reading for SsdpTransport {
             let answer = self.receive_datagram(socket)?.taken()?;
             let response = message::parse(&answer.bytes)?;
             let Some(chunk) = response.header(HEADER) else {
-                return Ok(Taken::new(alive.origin_uri, bytes));
+                let mut taken = Taken::new(alive.origin_uri, bytes);
+                taken.observed = alive.observed;
+                return Ok(taken);
             };
             bytes.extend(hex::decode(chunk)?);
         }
@@ -70,6 +73,10 @@ impl Reading for SsdpTransport {
 }
 
 impl Loopback for SsdpTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::PEER
+    }
+
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         Ok(Box::new(Bound::new(self.clone(), self.bind_udp()?)))
     }

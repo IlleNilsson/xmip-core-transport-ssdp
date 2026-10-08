@@ -202,6 +202,7 @@ fn arrived(peer: SocketAddr, message: &Message, raw: &[u8]) -> Arrived {
         raw,
         Acknowledgement::at_most_once(AT_MOST_ONCE),
     )
+    .from_peer(peer)
 }
 
 impl Transport for SsdpTransport {
