@@ -218,6 +218,10 @@ impl Transport for SsdpTransport {
         transport::Arrivals::Unordered("each datagram is its own")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Waits("a read of the socket waits for a datagram")
+    }
+
     /// One notification or search response, from the socket the first
     /// receive bound and kept: what arrived between two receives waits in
     /// its buffer. Acceptance is at-most-once here: nobody answers an SSDP
