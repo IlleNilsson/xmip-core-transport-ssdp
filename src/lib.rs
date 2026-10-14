@@ -361,7 +361,7 @@ mod tests {
         );
         let long = vec![0x2a; 5000];
         assert_eq!(loopback.round(&long).expect("long").bytes, long);
-        assert!(loopback.round(b"").expect("empty").bytes.is_empty());
+        assert_eq!(loopback.round(b"").expect("empty").bytes, [] as [u8; 0]);
         assert!(loopback.ceiling().is_none());
         assert!(loopback.refuses(opaque).is_none());
     }
