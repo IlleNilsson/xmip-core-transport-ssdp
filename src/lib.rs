@@ -226,12 +226,17 @@ impl Transport for SsdpTransport {
     /// receive bound and kept: what arrived between two receives waits in
     /// its buffer. Acceptance is at-most-once here: nobody answers an SSDP
     /// message ([`AT_MOST_ONCE`]).
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let socket = self.receiving.bound(|| self.bind_udp())?;
         Ok(vec![self.receive_datagram(socket)?])
     }
 
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one SSDP datagram carries the whole body")
+    }
+
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         let address = match Target::parse(target) {
             Ok(named) if named.is(&["ssdp"]) => named.authority(),
             Ok(_) => return Err(protocol_error(format!("not an ssdp target: {target}"))),
