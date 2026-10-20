@@ -2,7 +2,7 @@
 //! is `NOTIFY * HTTP/1.1`, `M-SEARCH * HTTP/1.1` or `HTTP/1.1 200 OK`,
 //! then headers to a blank line and nothing after it. Header names are
 //! matched without regard to case, as HTTP's are, because every `UPnP`
-//! stack capitalises them differently.
+//! stack capitalizes them differently.
 //!
 //! The head is HTTP's, written and read by `net::head` as every other
 //! line-oriented head is; this file wrote and read its own until
