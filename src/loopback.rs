@@ -15,11 +15,11 @@ use std::net::UdpSocket;
 use codec::hex;
 use net::Target;
 use transport::ArrivalIdentity;
-use transport::Taken;
 use transport::bound::{Bound, Reading};
 use transport::error::{Result, classify, protocol_error};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
+use transport::{Configured, Taken};
 
 use crate::message::{self, Message};
 use crate::{MAX_DATAGRAM, SsdpTransport};
@@ -121,7 +121,7 @@ impl SsdpTransport {
 
 /// The peer an origin `ssdp://peer?…` names.
 fn peer_of(origin: &str) -> Result<String> {
-    Target::under(&["ssdp"], origin)
+    Target::under(<SsdpTransport as Configured>::SCHEMES, origin)
         .map(|named| named.authority())
         .filter(|peer| !peer.is_empty())
         .map(str::to_string)

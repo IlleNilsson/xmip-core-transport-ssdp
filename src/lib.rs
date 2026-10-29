@@ -288,6 +288,9 @@ impl Configured for SsdpTransport {
         ],
     };
 
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["ssdp"];
+
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         let mut transport = Self::new(address);
         match (
