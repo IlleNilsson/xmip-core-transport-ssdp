@@ -103,13 +103,6 @@ impl SsdpTransport {
         self
     }
 
-    /// Give up waiting for a message after `timeout`.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     /// Bind the UDP socket, joining the group when the bind address is a
     /// multicast one, and report the address actually assigned.
     ///
@@ -278,18 +271,20 @@ impl Configured for SsdpTransport {
                           `usn`.",
                 applies: Applies::Both,
             },
-            Setting {
-                name: "timeout",
-                kind: xcore::settings::Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long a receive waits for a message; unbounded when left out.",
-                applies: Applies::Receive,
-            },
+            transport::configured::timeout(
+                Applies::Receive,
+                None,
+                "How long a receive waits for a message; unbounded when left out.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["ssdp"];
+
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
 
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         let mut transport = Self::new(address);
@@ -307,9 +302,6 @@ impl Configured for SsdpTransport {
                     "an announcement is st, usn and location together",
                 ));
             }
-        }
-        if let Some(timeout) = settings.optional_duration("timeout") {
-            transport = transport.timing_out_after(timeout);
         }
         Ok(transport)
     }
