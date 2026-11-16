@@ -70,7 +70,7 @@ pub struct SsdpTransport {
     timeout: Option<Duration>,
     /// The socket every send leaves from, bound once.
     sender: Sender,
-    /// The socket the first receive binds and joins the group on, and every
+    /// The socket its open binds and joins the group on, and every
     /// receive reads.
     receiving: Kept<UdpSocket>,
 }
@@ -220,7 +220,7 @@ impl Transport for SsdpTransport {
     /// its buffer. Acceptance is at-most-once here: nobody answers an SSDP
     /// message ([`AT_MOST_ONCE`]).
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
-        let socket = self.receiving.bound(|| self.bind_udp())?;
+        let socket = self.receiving.listener()?;
         Ok(vec![self.receive_datagram(socket)?])
     }
 
@@ -304,6 +304,12 @@ impl Configured for SsdpTransport {
             }
         }
         Ok(transport)
+    }
+
+    /// The socket every receive takes from, bound where a Receive Location
+    /// listens.
+    fn listening(&self) -> Result<Option<&str>> {
+        self.receiving.listening(|| self.bind_udp())
     }
 }
 
