@@ -148,8 +148,10 @@ pub fn is_message(bytes: &[u8]) -> bool {
 /// One datagram.
 ///
 /// # Errors
-/// Not text, or not one of the three start lines. A line without a colon
-/// is not a header and is passed over, as HTTP's reader passes it over.
+/// Not text, not one of the three start lines, or a field HTTP's reader
+/// refuses (`net::head::fields`): a folded line, a name that is not a
+/// token. A line without a colon is not a header and is passed over, as
+/// HTTP's reader passes it over.
 pub fn parse(bytes: &[u8]) -> Result<Message> {
     let lines = head::read_head(&mut &bytes[..])?;
     let start = lines.first().map_or("", |line| line.trim());
@@ -161,7 +163,7 @@ pub fn parse(bytes: &[u8]) -> Result<Message> {
     };
     Ok(Message {
         kind,
-        headers: head::fields(&lines[1..]),
+        headers: head::fields(&lines[1..])?,
     })
 }
 
@@ -211,6 +213,10 @@ mod tests {
         assert!(parse(b"HTTP/1.1 404 Not Found\r\n\r\n").is_err(), "not 200");
         let passed = parse(b"NOTIFY * HTTP/1.1\r\nno colon\r\nNT: a\r\n\r\n").expect("read");
         assert_eq!(passed.headers, [("NT".to_string(), "a".to_string())]);
+        assert!(
+            parse(b"NOTIFY * HTTP/1.1\r\nNT : a\r\n\r\n").is_err(),
+            "space before :"
+        );
         assert!(parse(&[0xff]).is_err(), "not text");
         assert!(
             !is_message(b"http://10.0.0.5/d.xml"),
