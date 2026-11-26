@@ -31,30 +31,48 @@
 //! binds the port on every interface and joins the group — and is never
 //! used under test; a test binds `127.0.0.1:0` and sends from a second
 //! socket.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod loopback;
+#[cfg(feature = "default")]
 pub mod message;
 
+#[cfg(feature = "default")]
 use std::net::{SocketAddr, UdpSocket};
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
 pub use message::{ALIVE, ALL, BYEBYE, GROUP, Kind, Message};
+#[cfg(feature = "default")]
 use net::Target;
+#[cfg(feature = "default")]
 use transport::error::{Result, classify, protocol_error};
-use transport::kept::Kept;
-use transport::sender::Sender;
-use transport::socket;
-use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
-use xcore::settings::{Applies, Presence, Read, Setting, Settings};
+#[cfg(feature = "default")]
+use transport::{
+    Acknowledgement, Arrived, Configured, Directions, Transport, kept::Kept, sender::Sender, socket,
+};
+#[cfg(feature = "default")]
+use xcore::settings::{Read, Settings};
 
 /// Why an SSDP message cannot be acknowledged after the receive cycle.
+#[cfg(feature = "default")]
 pub const AT_MOST_ONCE: &str = "an SSDP notification or search response is a datagram nobody \
                                 answers, so its device is never told how the receive cycle ended";
 
 /// The largest datagram taken; an SSDP message is a few hundred bytes.
+#[cfg(feature = "default")]
 pub const MAX_DATAGRAM: usize = 8192;
 
 /// What this node says it is, when asked or when announcing.
+#[cfg(feature = "default")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Announcement {
     pub st: String,
@@ -62,6 +80,7 @@ pub struct Announcement {
     pub location: String,
 }
 
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct SsdpTransport {
     bind: String,
@@ -75,6 +94,7 @@ pub struct SsdpTransport {
     receiving: Kept<UdpSocket>,
 }
 
+#[cfg(feature = "default")]
 impl SsdpTransport {
     /// Listen at `bind`: the group `239.255.255.250:1900` for what the
     /// network announces, or a unicast address for answers to a search.
@@ -184,6 +204,7 @@ impl SsdpTransport {
 }
 
 /// One message, whole; acceptance is at-most-once ([`AT_MOST_ONCE`]).
+#[cfg(feature = "default")]
 fn arrived(peer: SocketAddr, message: &Message, raw: &[u8]) -> Arrived {
     Arrived::whole(
         format!(
@@ -198,6 +219,7 @@ fn arrived(peer: SocketAddr, message: &Message, raw: &[u8]) -> Arrived {
     .from_peer(peer)
 }
 
+#[cfg(feature = "default")]
 impl Transport for SsdpTransport {
     fn name(&self) -> &'static str {
         "ssdp"
@@ -240,47 +262,10 @@ impl Transport for SsdpTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for SsdpTransport {
-    /// The address is where a Receive Location listens: the group
-    /// `239.255.255.250:1900`, or a unicast address for answers to its own
-    /// searches. A send's target is each send's own.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "st",
-                kind: xcore::settings::Kind::Text,
-                presence: Presence::Optional,
-                meaning: "The search target this node announces and answers searches for, given \
-                          with `usn` and `location`; nothing is announced when left out.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "usn",
-                kind: xcore::settings::Kind::Text,
-                presence: Presence::Optional,
-                meaning: "The unique service name this node announces, given with `st` and \
-                          `location`.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "location",
-                kind: xcore::settings::Kind::Text,
-                presence: Presence::Optional,
-                meaning: "The URL of the description this node announces, given with `st` and \
-                          `usn`.",
-                applies: Applies::Both,
-            },
-            transport::configured::timeout(
-                Applies::Receive,
-                None,
-                "How long a receive waits for a message; unbounded when left out.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["ssdp"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.timeout)
@@ -322,7 +307,7 @@ mod tests {
 
     #[test]
     fn ssdp_declares_its_settings_and_reads_through_them() {
-        use xcore::settings::Given;
+        use xcore::settings::{Applies, Given};
         assert_eq!(SsdpTransport::SETTINGS.problems(), Vec::<String>::new());
         let text = |name: &str, value: &str| (name.to_string(), Given::Text(value.to_string()));
         let given = [
